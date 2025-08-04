@@ -13,6 +13,20 @@ from tqdm import tqdm
 from dataset import MyDataset
 from model import BaselineModel
 
+# 检测环境变量是否存在，如果不存在则尝试加载
+required_env_vars = ['TRAIN_LOG_PATH', 'TRAIN_TF_EVENTS_PATH', 'TRAIN_DATA_PATH', 'TRAIN_CKPT_PATH']
+missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+
+if missing_vars:
+    try:
+        from load_env import load_env
+        load_env()
+        print("已从 .env 文件加载环境变量")
+    except ImportError:
+        print('未找到 .env 文件')
+else:
+    print("环境变量已存在，跳过加载")
+
 
 def get_args():
     parser = argparse.ArgumentParser()
