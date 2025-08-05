@@ -42,7 +42,7 @@ class MyDataset(torch.utils.data.Dataset):
         self.maxlen = args.maxlen
         self.mm_emb_ids = args.mm_emb_id
 
-        self.item_feat_dict = json.load(open(Path(data_dir, "item_feat_dict.json"), 'r'))
+        self.item_feat_dict = json.load(open(Path(data_dir, "item_feat_dict.json"), 'r'))  # key: item_reid, value: {feture_reid, value}
         self.mm_emb_dict = load_mm_emb(Path(data_dir, "creative_emb"), self.mm_emb_ids)
         with open(self.data_dir / 'indexer.pkl', 'rb') as ff:
             indexer = pickle.load(ff)
@@ -455,7 +455,12 @@ def load_mm_emb(mm_path, feat_ids):
         if feat_id != '81':
             try:
                 base_path = Path(mm_path, f'emb_{feat_id}_{shape}')
-                for json_file in base_path.glob('*.json'):
+                # 检查base_path下是否有 json 文件
+                json_files = list(base_path.glob('*.json'))
+                if not json_files:
+                    # 如果没有json文件，则查找.part文件
+                    json_files = list(base_path.glob('part*'))
+                for json_file in json_files:
                     with open(json_file, 'r', encoding='utf-8') as file:
                         for line in file:
                             data_dict_origin = json.loads(line.strip())
@@ -466,6 +471,7 @@ def load_mm_emb(mm_path, feat_ids):
                             emb_dict.update(data_dict)
             except Exception as e:
                 print(f"transfer error: {e}")
+            pickle.dump(emb_dict, open(Path(mm_path, f'emb_{feat_id}_{shape}.pkl'), 'wb'))
         if feat_id == '81':
             with open(Path(mm_path, f'emb_{feat_id}_{shape}.pkl'), 'rb') as f:
                 emb_dict = pickle.load(f)

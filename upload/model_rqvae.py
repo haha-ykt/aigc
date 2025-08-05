@@ -8,43 +8,47 @@
 import torch
 import torch.nn.functional as F
 from sklearn.cluster import KMeans
+import os
+from pathlib import Path
+from dataset import load_mm_emb
 
-# class MmEmbDataset(torch.utils.data.Dataset):
-#     """
-#     Build Dataset for RQ-VAE Training
 
-#     Args:
-#         data_dir = os.environ.get('TRAIN_DATA_PATH')
-#         feature_id = MM emb ID
-#     """
+class MmEmbDataset(torch.utils.data.Dataset):
+    """
+    Build Dataset for RQ-VAE Training
 
-#     def __init__(self, data_dir, feature_id):
-#         super().__init__()
-#         self.data_dir = Path(data_dir)
-#         self.mm_emb_id = [feature_id]
-#         self.mm_emb_dict = load_mm_emb(Path(data_dir, "creative_emb"), self.mm_emb_id)
+    Args:
+        data_dir = os.environ.get('TRAIN_DATA_PATH')
+        feature_id = MM emb ID
+    """
 
-#         self.mm_emb = self.mm_emb_dict[self.mm_emb_id[0]]
-#         self.tid_list, self.emb_list = list(self.mm_emb.keys()), list(self.mm_emb.values())
-#         self.emb_list = [torch.tensor(emb, dtype=torch.float32) for emb in self.emb_list]
+    def __init__(self, data_dir, feature_id):
+        super().__init__()
+        self.data_dir = Path(data_dir)
+        self.mm_emb_id = [feature_id]
+        self.mm_emb_dict = load_mm_emb(Path(data_dir, "creative_emb"), self.mm_emb_id)
 
-#         assert len(self.tid_list) == len(self.emb_list)
-#         self.item_cnt = len(self.tid_list)
+        self.mm_emb = self.mm_emb_dict[self.mm_emb_id[0]]
+        self.tid_list, self.emb_list = list(self.mm_emb.keys()), list(self.mm_emb.values())
+        self.emb_list = [torch.tensor(emb, dtype=torch.float32) for emb in self.emb_list]
 
-#     def __getitem__(self, index):
-#         tid = torch.tensor(self.tid_list[index], dtype=torch.long)
-#         emb = self.emb_list[index]
-#         return tid, emb
+        assert len(self.tid_list) == len(self.emb_list)
+        self.item_cnt = len(self.tid_list)
 
-#     def __len__(self):
-#         return self.item_cnt
+    def __getitem__(self, index):
+        tid = torch.tensor(self.tid_list[index], dtype=torch.long)
+        emb = self.emb_list[index]
+        return tid, emb
 
-#     @staticmethod
-#     def collate_fn(batch):
-#         tid, emb = zip(*batch)
+    def __len__(self):
+        return self.item_cnt
 
-#         tid_batch, emb_batch = torch.stack(tid, dim=0), torch.stack(emb, dim=0)
-#         return tid_batch, emb_batch
+    @staticmethod
+    def collate_fn(batch):
+        tid, emb = zip(*batch)
+
+        tid_batch, emb_batch = torch.stack(tid, dim=0), torch.stack(emb, dim=0)
+        return tid_batch, emb_batch
 
 
 ## Kmeans
@@ -407,3 +411,21 @@ class RQVAE(torch.nn.Module):
         x_hat = self.decode(vq_emb_list)
         recon_loss, rqvae_loss, total_loss = self.compute_loss(x_hat, x_gt, rqvae_loss)
         return x_hat, semantic_id_list, recon_loss, rqvae_loss, total_loss
+
+
+if __name__ == "__main__":
+    # 检测环境变量是否存在，如果不存在则尝试加载
+    required_env_vars = ['TRAIN_LOG_PATH', 'TRAIN_TF_EVENTS_PATH', 'TRAIN_DATA_PATH', 'TRAIN_CKPT_PATH']
+    missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+
+    if missing_vars:
+        try:
+            from load_env import load_env
+            load_env()
+            print("已从 .env 文件加载环境变量")
+        except ImportError:
+            print('未找到 .env 文件')
+    else:
+        print("环境变量已存在，跳过加载")
+
+    dataset = MmEmbDataset(data_dir=os.environ.get('TRAIN_DATA_PATH'), feature_id='85')  # 32维，本地测试下
