@@ -207,3 +207,9 @@ __marimo__/
 TencentGR_1k
 
 tensorboard_logs
+
+.vscode
+checkpoints
+logs
+
+tmp*

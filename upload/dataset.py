@@ -471,10 +471,96 @@ def load_mm_emb(mm_path, feat_ids):
                             emb_dict.update(data_dict)
             except Exception as e:
                 print(f"transfer error: {e}")
-            pickle.dump(emb_dict, open(Path(mm_path, f'emb_{feat_id}_{shape}.pkl'), 'wb'))
         if feat_id == '81':
             with open(Path(mm_path, f'emb_{feat_id}_{shape}.pkl'), 'rb') as f:
                 emb_dict = pickle.load(f)
         mm_emb_dict[feat_id] = emb_dict
         print(f'Loaded #{feat_id} mm_emb')
     return mm_emb_dict
+
+
+if __name__ == '__main__':
+    import os
+    from main import get_args
+    # 检测环境变量是否存在，如果不存在则尝试加载
+    required_env_vars = ['TRAIN_LOG_PATH', 'TRAIN_TF_EVENTS_PATH', 'TRAIN_DATA_PATH', 'TRAIN_CKPT_PATH']
+    missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+    if missing_vars:
+        try:
+            from load_env import load_env
+            load_env()
+            print("已从 .env 文件加载环境变量")
+        except ImportError:
+            print('未找到 .env 文件')
+    else:
+        print("环境变量已存在，跳过加载")
+
+    # global dataset
+    data_path = os.environ.get('TRAIN_DATA_PATH')
+    args = get_args()
+    dataset = MyDataset(data_path, args)
+    feature_default_value, feature_types, feat_statistics = dataset._init_feat_info()
+
+    print("=" * 80)
+    print("特征信息汇总")
+    print("=" * 80)
+
+    # 1. 按类型分组显示特征统计
+    print("\n📊 特征类型分布:")
+    print("-" * 50)
+    for feat_type, feat_ids in feature_types.items():
+        if feat_ids:  # 只显示非空的特征类型
+            print(f"{feat_type:15s}: {len(feat_ids):3d} 个特征 -> {feat_ids}")
+        else:
+            print(f"{feat_type:15s}: {len(feat_ids):3d} 个特征")
+
+    # 2. 显示特征默认值（按类型分组）
+    print(f"\n🔧 特征默认值:")
+    print("-" * 50)
+    for feat_type, feat_ids in feature_types.items():
+        if feat_ids:
+            print(f"\n{feat_type}:")
+            for feat_id in feat_ids:
+                default_val = feature_default_value[feat_id]
+                if isinstance(default_val, np.ndarray):
+                    print(f"  {feat_id}: numpy数组(shape={default_val.shape}, dtype={default_val.dtype})")
+                elif isinstance(default_val, list):
+                    print(f"  {feat_id}: {default_val}")
+                else:
+                    print(f"  {feat_id}: {default_val}")
+
+    # 3. 显示特征统计信息（按类型分组，并排序）
+    print(f"\n📈 特征统计信息:")
+    print("-" * 50)
+    for feat_type, feat_ids in feature_types.items():
+        if feat_ids and feat_ids[0] in feat_statistics:  # 有统计信息的特征类型
+            print(f"\n{feat_type}:")
+            # 按统计值排序
+            sorted_feats = sorted(feat_ids, key=lambda x: feat_statistics.get(x, 0), reverse=True)
+            for feat_id in sorted_feats:
+                if feat_id in feat_statistics:
+                    count = feat_statistics[feat_id]
+                    print(f"  {feat_id}: {count:8,} 个不同值")
+
+    # 4. 总体统计
+    print(f"\n📋 总体统计:")
+    print("-" * 50)
+    total_features = sum(len(feat_ids) for feat_ids in feature_types.values())
+    features_with_stats = len(feat_statistics)
+    total_unique_values = sum(feat_statistics.values())
+
+    print(f"总特征数量: {total_features}")
+    print(f"有统计信息的特征数量: {features_with_stats}")
+    print(f"所有特征的唯一值总数: {total_unique_values:,}")
+
+    # 5. 特征规模分析
+    if feat_statistics:
+        print(f"\n📊 特征规模分析:")
+        print("-" * 50)
+        stats_values = list(feat_statistics.values())
+        print(f"最大特征规模: {max(stats_values):,}")
+        print(f"最小特征规模: {min(stats_values):,}")
+        print(f"平均特征规模: {np.mean(stats_values):,.1f}")
+        print(f"中位数特征规模: {np.median(stats_values):,.1f}")
+
+    print("=" * 80)

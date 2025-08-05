@@ -53,6 +53,10 @@ def get_args():
 
     args = parser.parse_args()
 
+    # 如果没有cuda, 则使用cpu
+    if not torch.cuda.is_available():
+        args.device = 'cpu'
+
     return args
 
 
@@ -74,8 +78,15 @@ if __name__ == '__main__':
         valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, collate_fn=dataset.collate_fn
     )
     usernum, itemnum = dataset.usernum, dataset.itemnum
+    
+    # feat_types: 字典, 形如 {'user_sparse' =['103', '104', '105', '109']}，有 'user_sparse', 'item_sparse', 'user_array', 'item_array', 'item_emb', 'user_continual', 'intem_continual' 这7种类型
+    # feat_statistics, 形如 {'103':67, '104':2}，记录了'100'-'122'（缺失113）这些特征的的取值数量
+    # user_sparse: [103, 104, 105, 109]
+    # item_sparse: [100, 101, 102, 111, 112, 114, 115, 116, 117, 118, 119, 120, 121, 122]
+    # user_array: [106, 107, 108, 110]，这些类似多标签的离散特征，类似（最喜欢的几个类别？）
+    # item_emb: [81]
+    # item_array, user_continual, item_continual 暂时没有
     feat_statistics, feat_types = dataset.feat_statistics, dataset.feature_types
-
     model = BaselineModel(usernum, itemnum, feat_statistics, feat_types, args).to(args.device)
 
     for name, param in model.named_parameters():
@@ -88,7 +99,7 @@ if __name__ == '__main__':
     model.item_emb.weight.data[0, :] = 0
     model.user_emb.weight.data[0, :] = 0
 
-    for k in model.sparse_emb:
+    for k in model.sparse_emb:  # '100'-'122'
         model.sparse_emb[k].weight.data[0, :] = 0
 
     epoch_start_idx = 1
