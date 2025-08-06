@@ -156,6 +156,7 @@ class BaselineModel(torch.nn.Module):
             new_fwd_layer = PointWiseFeedForward(args.hidden_units, args.dropout_rate)
             self.forward_layers.append(new_fwd_layer)
 
+        # 给用户/物品的sparse、array特征创建Embedding Table
         for k in self.USER_SPARSE_FEAT:
             self.sparse_emb[k] = torch.nn.Embedding(self.USER_SPARSE_FEAT[k] + 1, args.hidden_units, padding_idx=0)
         for k in self.ITEM_SPARSE_FEAT:
@@ -175,13 +176,13 @@ class BaselineModel(torch.nn.Module):
             feat_statistics: 特征统计信息，key为特征ID，value为特征数量
             feat_types: 各个特征的特征类型，key为特征类型名称，value为包含的特征ID列表，包括user和item的sparse, array, emb, continual类型
         """
-        self.USER_SPARSE_FEAT = {k: feat_statistics[k] for k in feat_types['user_sparse']}
-        self.USER_CONTINUAL_FEAT = feat_types['user_continual']
-        self.ITEM_SPARSE_FEAT = {k: feat_statistics[k] for k in feat_types['item_sparse']}
-        self.ITEM_CONTINUAL_FEAT = feat_types['item_continual']
-        self.USER_ARRAY_FEAT = {k: feat_statistics[k] for k in feat_types['user_array']}
-        self.ITEM_ARRAY_FEAT = {k: feat_statistics[k] for k in feat_types['item_array']}
-        EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 3584}
+        self.USER_SPARSE_FEAT = {k: feat_statistics[k] for k in feat_types['user_sparse']}  # {'103': 67, '104': 2, '105': 7, '109': 3}
+        self.USER_CONTINUAL_FEAT = feat_types['user_continual']  # []
+        self.ITEM_SPARSE_FEAT = {k: feat_statistics[k] for k in feat_types['item_sparse']}  # {'100': 6, '117': 285, '111': 58734, '118': 745, '101': 44, '102': 11136, '119': 1745, '120': 1343, '114': 17, '112': 25, '121': 49079, '115': 187, '122': 11151, '116': 18}
+        self.ITEM_CONTINUAL_FEAT = feat_types['item_continual']  # 【】
+        self.USER_ARRAY_FEAT = {k: feat_statistics[k] for k in feat_types['user_array']}  # {'106': 13, '107': 17, '108': 4, '110': 2}
+        self.ITEM_ARRAY_FEAT = {k: feat_statistics[k] for k in feat_types['item_array']}  # {}
+        EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 3584}  # {'81': 32}
         self.ITEM_EMB_FEAT = {k: EMB_SHAPE_DICT[k] for k in feat_types['item_emb']}  # 记录的是不同多模态特征的维度
 
     def feat2tensor(self, seq_feature, k):
@@ -227,9 +228,9 @@ class BaselineModel(torch.nn.Module):
     def feat2emb(self, seq, feature_array, mask=None, include_user=False):
         """
         Args:
-            seq: 序列ID
-            feature_array: 特征list，每个元素为当前时刻的特征字典
-            mask: 掩码，1表示item，2表示user
+            seq: 序列ID, [batch_size, 102], 每个元素为item id或user id
+            feature_array: 特征list，每个元素为当前时刻的特征字典, [batch_size, 102], feature_array[i][j]表示第batch中第i个样本的第 j 时刻特征
+            mask: 掩码，1表示item，2表示user, [batch_size, 102]
             include_user: 是否处理用户特征，在两种情况下不打开：1) 训练时在转换正负样本的特征时（因为正负样本都是item）;2) 生成候选库item embedding时。
 
         Returns:
@@ -237,11 +238,12 @@ class BaselineModel(torch.nn.Module):
         """
         seq = seq.to(self.dev)
         # pre-compute embedding
+        # 获取user, item本身的embedding
         if include_user:
-            user_mask = (mask == 2).to(self.dev)
-            item_mask = (mask == 1).to(self.dev)
-            user_embedding = self.user_emb(user_mask * seq)
-            item_embedding = self.item_emb(item_mask * seq)
+            user_mask = (mask == 2).to(self.dev)  # [batch_size, 102]
+            item_mask = (mask == 1).to(self.dev)  # [batch_size, 102]
+            user_embedding = self.user_emb(user_mask * seq)  # [batch_size, 102, 32], 如果user_mask是False（不是user），对应的embedding元素置为0
+            item_embedding = self.item_emb(item_mask * seq)  # [batch_size, 102, 32]
             item_feat_list = [item_embedding]
             user_feat_list = [user_embedding]
         else:
@@ -264,21 +266,29 @@ class BaselineModel(torch.nn.Module):
                 ]
             )
 
+        # 添加sparse, array, continual特征
         # batch-process each feature type
         for feat_dict, feat_type, feat_list in all_feat_types:
+            # feat_dict, 形如 {'100': 6, '117': 285, '111': 58734, '118': 745, '101': 44, '102': 11136, '119': 1745, '120': 1343, '114': 17, '112': 25, '121': 49079, '115': 187, '122': 11151, '116': 18}
+            # feat_type, 形如 'item_sparse'
+            # feat_list, [item_embedding]
             if not feat_dict:
                 continue
 
+            # 给每个特征创建一个tensor
             for k in feat_dict:
                 tensor_feature = self.feat2tensor(feature_array, k)
 
                 if feat_type.endswith('sparse'):
+                    # sparse_emb为字典, sparse_emb[k]取到了特征k的embedding矩阵，tensor_feature为特征k的值即特征k的取值索引
                     feat_list.append(self.sparse_emb[k](tensor_feature))
                 elif feat_type.endswith('array'):
+                    # array采用sum pooling聚合
                     feat_list.append(self.sparse_emb[k](tensor_feature).sum(2))
                 elif feat_type.endswith('continual'):
                     feat_list.append(tensor_feature.unsqueeze(2))
 
+        # 处理多模态特征
         for k in self.ITEM_EMB_FEAT:
             # collect all data to numpy, then batch-convert
             batch_size = len(feature_array)

@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import random
 import time
 from pathlib import Path
 
@@ -12,6 +13,16 @@ from tqdm import tqdm
 
 from dataset import MyDataset
 from model import BaselineModel
+
+# 设置随机数种子以确保可重现性
+def set_seed(seed=2025):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 # 检测环境变量是否存在，如果不存在则尝试加载
 required_env_vars = ['TRAIN_LOG_PATH', 'TRAIN_TF_EVENTS_PATH', 'TRAIN_DATA_PATH', 'TRAIN_CKPT_PATH']
@@ -32,7 +43,7 @@ def get_args():
     parser = argparse.ArgumentParser()
 
     # Train params
-    parser.add_argument('--batch_size', default=128, type=int)
+    parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--maxlen', default=101, type=int)
 
@@ -61,6 +72,9 @@ def get_args():
 
 
 if __name__ == '__main__':
+    # 设置随机数种子
+    set_seed(2025)
+
     Path(os.environ.get('TRAIN_LOG_PATH')).mkdir(parents=True, exist_ok=True)
     Path(os.environ.get('TRAIN_TF_EVENTS_PATH')).mkdir(parents=True, exist_ok=True)
     log_file = open(Path(os.environ.get('TRAIN_LOG_PATH'), 'train.log'), 'w')
