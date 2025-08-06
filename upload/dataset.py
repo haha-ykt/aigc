@@ -48,7 +48,7 @@ class MyDataset(torch.utils.data.Dataset):
             indexer = pickle.load(ff)
             self.itemnum = len(indexer['i'])
             self.usernum = len(indexer['u'])
-        self.indexer_i_rev = {v: k for k, v in indexer['i'].items()}
+        self.indexer_i_rev = {v: k for k, v in indexer['i'].items()}  # 这里主要用了 原始item id-> reid 的映射，因为物品的mmemb的id是原始item id
         self.indexer_u_rev = {v: k for k, v in indexer['u'].items()}
         self.indexer = indexer
 
@@ -114,52 +114,66 @@ class MyDataset(torch.utils.data.Dataset):
         user_sequence = self._load_user_data(uid)  # 动态加载用户数据
 
         ext_user_sequence = []
-        for record_tuple in user_sequence:
+        for __, record_tuple in enumerate(user_sequence):
             u, i, user_feat, item_feat, action_type, _ = record_tuple
             if u and user_feat:
-                ext_user_sequence.insert(0, (u, user_feat, 2, action_type))
+                ext_user_sequence.insert(0, (u, user_feat, 2, action_type))  # user profile, 每个user_seq只有一个，且一定是最后一个，所以user_profile会被insert(0)加到ext_user_sequence的最前面
+                u_index = __
             if i and item_feat:
-                ext_user_sequence.append((i, item_feat, 1, action_type))
+                ext_user_sequence.append((i, item_feat, 1, action_type))  # item interaction
+        # print("len(ext_user_sequence):", len(ext_user_sequence), "u_index", u_index)
 
-        seq = np.zeros([self.maxlen + 1], dtype=np.int32)
-        pos = np.zeros([self.maxlen + 1], dtype=np.int32)
-        neg = np.zeros([self.maxlen + 1], dtype=np.int32)
-        token_type = np.zeros([self.maxlen + 1], dtype=np.int32)
-        next_token_type = np.zeros([self.maxlen + 1], dtype=np.int32)
-        next_action_type = np.zeros([self.maxlen + 1], dtype=np.int32)
+        # max_len取的是101
+        seq = np.zeros([self.maxlen + 1], dtype=np.int32)  # (102, 1)
+        pos = np.zeros([self.maxlen + 1], dtype=np.int32)  # (102, 1)
+        neg = np.zeros([self.maxlen + 1], dtype=np.int32)  # (102, 1)
+        token_type = np.zeros([self.maxlen + 1], dtype=np.int32)  # (102, 1)
+        next_token_type = np.zeros([self.maxlen + 1], dtype=np.int32)  # (102, 1)
+        next_action_type = np.zeros([self.maxlen + 1], dtype=np.int32)  # (102, 1)
 
         seq_feat = np.empty([self.maxlen + 1], dtype=object)
         pos_feat = np.empty([self.maxlen + 1], dtype=object)
         neg_feat = np.empty([self.maxlen + 1], dtype=object)
 
+        # nxt是行为序列中的最后一个，按照目前的也是item interaction, user profile是行为序列的第一个
         nxt = ext_user_sequence[-1]
         idx = self.maxlen
 
         ts = set()
+        # ts是item interaction的item id的集合
         for record_tuple in ext_user_sequence:
+            # 排除user profile
             if record_tuple[2] == 1 and record_tuple[0]:
                 ts.add(record_tuple[0])
 
         # left-padding, 从后往前遍历，将用户序列填充到maxlen+1的长度
         for record_tuple in reversed(ext_user_sequence[:-1]):
+            # i: int, item_id
+            # feat: dict, 形如 {'112':14,...}
+            # type_: int，按照上面的，只要是item interaction, 都是1
+            # act_type: int, 0较多,1较少,少量None
             i, feat, type_, act_type = record_tuple
             next_i, next_feat, next_type, next_act_type = nxt
-            feat = self.fill_missing_feat(feat, i)
-            next_feat = self.fill_missing_feat(next_feat, next_i)
-            seq[idx] = i
-            token_type[idx] = type_
-            next_token_type[idx] = next_type
+            feat = self.fill_missing_feat(feat, i)  # dict, 形如 {'112':22, ...}
+            next_feat = self.fill_missing_feat(next_feat, next_i)  # dict
+            seq[idx] = i  # item_id
+            token_type[idx] = type_  # item_interaction, 1
+            next_token_type[idx] = next_type  # item_interaction, 1
+            # next_action_type: 0, 1, 或 None
             if next_act_type is not None:
                 next_action_type[idx] = next_act_type
-            seq_feat[idx] = feat
+            seq_feat[idx] = feat  # 更新feat序列
             if next_type == 1 and next_i != 0:
-                pos[idx] = next_i
-                pos_feat[idx] = next_feat
-                neg_id = self._random_neq(1, self.itemnum + 1, ts)
-                neg[idx] = neg_id
-                neg_feat[idx] = self.fill_missing_feat(self.item_feat_dict[str(neg_id)], neg_id)
-            nxt = record_tuple
+                pos[idx] = next_i  # 正样本item id置为next_i
+                pos_feat[idx] = next_feat  # 正样本feat置为next_feat
+                neg_id = self._random_neq(1, self.itemnum + 1, ts)  # 负样本随机采样，不从ts里面取
+                neg[idx] = neg_id  # 负样本item id
+                neg_feat[idx] = self.fill_missing_feat(self.item_feat_dict[str(neg_id)], neg_id)  # 负样本feat
+            nxt = record_tuple  # 更新nxt为当前record_tuple
             idx -= 1
+            # idx初始值为101, -1后变成100 刚开始最多是拿 1 user_profile + 99 item_interaction 预测第 100 个item_interaction
+            # 就算最长，最后一个是拿 1 user_profile 预测 第 1 个item_interaction 
+            # 所以一般走不到idx==-1，这是是为了保险起见
             if idx == -1:
                 break
 
@@ -255,9 +269,12 @@ class MyDataset(torch.utils.data.Dataset):
         all_feat_ids = []
         for feat_type in self.feature_types.values():
             all_feat_ids.extend(feat_type)
+        # 缺失的fields可能是 sparse, array, continual, emb
         missing_fields = set(all_feat_ids) - set(feat.keys())
+        # 如果不是mmemb，用默认值填充
         for feat_id in missing_fields:
             filled_feat[feat_id] = self.feature_default_value[feat_id]
+        # 如果是mmemb，这里应该走的不缺失的逻辑，是找到item_id对应的emb填上去；原来没有只是因为seq.jsonl里面没有这个数据
         for feat_id in self.feature_types['item_emb']:
             if item_id != 0 and self.indexer_i_rev[item_id] in self.mm_emb_dict[feat_id]:
                 if type(self.mm_emb_dict[feat_id][self.indexer_i_rev[item_id]]) == np.ndarray:
@@ -495,72 +512,75 @@ if __name__ == '__main__':
     else:
         print("环境变量已存在，跳过加载")
 
-    # global dataset
-    data_path = os.environ.get('TRAIN_DATA_PATH')
-    args = get_args()
-    dataset = MyDataset(data_path, args)
-    feature_default_value, feature_types, feat_statistics = dataset._init_feat_info()
+    def feat_stat():
+        # global dataset
+        data_path = os.environ.get('TRAIN_DATA_PATH')
+        args = get_args()
+        dataset = MyDataset(data_path, args)
+        feature_default_value, feature_types, feat_statistics = dataset._init_feat_info()
 
-    print("=" * 80)
-    print("特征信息汇总")
-    print("=" * 80)
+        print("=" * 80)
+        print("特征信息汇总")
+        print("=" * 80)
 
-    # 1. 按类型分组显示特征统计
-    print("\n📊 特征类型分布:")
-    print("-" * 50)
-    for feat_type, feat_ids in feature_types.items():
-        if feat_ids:  # 只显示非空的特征类型
-            print(f"{feat_type:15s}: {len(feat_ids):3d} 个特征 -> {feat_ids}")
-        else:
-            print(f"{feat_type:15s}: {len(feat_ids):3d} 个特征")
-
-    # 2. 显示特征默认值（按类型分组）
-    print(f"\n🔧 特征默认值:")
-    print("-" * 50)
-    for feat_type, feat_ids in feature_types.items():
-        if feat_ids:
-            print(f"\n{feat_type}:")
-            for feat_id in feat_ids:
-                default_val = feature_default_value[feat_id]
-                if isinstance(default_val, np.ndarray):
-                    print(f"  {feat_id}: numpy数组(shape={default_val.shape}, dtype={default_val.dtype})")
-                elif isinstance(default_val, list):
-                    print(f"  {feat_id}: {default_val}")
-                else:
-                    print(f"  {feat_id}: {default_val}")
-
-    # 3. 显示特征统计信息（按类型分组，并排序）
-    print(f"\n📈 特征统计信息:")
-    print("-" * 50)
-    for feat_type, feat_ids in feature_types.items():
-        if feat_ids and feat_ids[0] in feat_statistics:  # 有统计信息的特征类型
-            print(f"\n{feat_type}:")
-            # 按统计值排序
-            sorted_feats = sorted(feat_ids, key=lambda x: feat_statistics.get(x, 0), reverse=True)
-            for feat_id in sorted_feats:
-                if feat_id in feat_statistics:
-                    count = feat_statistics[feat_id]
-                    print(f"  {feat_id}: {count:8,} 个不同值")
-
-    # 4. 总体统计
-    print(f"\n📋 总体统计:")
-    print("-" * 50)
-    total_features = sum(len(feat_ids) for feat_ids in feature_types.values())
-    features_with_stats = len(feat_statistics)
-    total_unique_values = sum(feat_statistics.values())
-
-    print(f"总特征数量: {total_features}")
-    print(f"有统计信息的特征数量: {features_with_stats}")
-    print(f"所有特征的唯一值总数: {total_unique_values:,}")
-
-    # 5. 特征规模分析
-    if feat_statistics:
-        print(f"\n📊 特征规模分析:")
+        # 1. 按类型分组显示特征统计
+        print("\n📊 特征类型分布:")
         print("-" * 50)
-        stats_values = list(feat_statistics.values())
-        print(f"最大特征规模: {max(stats_values):,}")
-        print(f"最小特征规模: {min(stats_values):,}")
-        print(f"平均特征规模: {np.mean(stats_values):,.1f}")
-        print(f"中位数特征规模: {np.median(stats_values):,.1f}")
+        for feat_type, feat_ids in feature_types.items():
+            if feat_ids:  # 只显示非空的特征类型
+                print(f"{feat_type:15s}: {len(feat_ids):3d} 个特征 -> {feat_ids}")
+            else:
+                print(f"{feat_type:15s}: {len(feat_ids):3d} 个特征")
 
-    print("=" * 80)
+        # 2. 显示特征默认值（按类型分组）
+        print(f"\n🔧 特征默认值:")
+        print("-" * 50)
+        for feat_type, feat_ids in feature_types.items():
+            if feat_ids:
+                print(f"\n{feat_type}:")
+                for feat_id in feat_ids:
+                    default_val = feature_default_value[feat_id]
+                    if isinstance(default_val, np.ndarray):
+                        print(f"  {feat_id}: numpy数组(shape={default_val.shape}, dtype={default_val.dtype})")
+                    elif isinstance(default_val, list):
+                        print(f"  {feat_id}: {default_val}")
+                    else:
+                        print(f"  {feat_id}: {default_val}")
+
+        # 3. 显示特征统计信息（按类型分组，并排序）
+        print(f"\n📈 特征统计信息:")
+        print("-" * 50)
+        for feat_type, feat_ids in feature_types.items():
+            if feat_ids and feat_ids[0] in feat_statistics:  # 有统计信息的特征类型
+                print(f"\n{feat_type}:")
+                # 按统计值排序
+                sorted_feats = sorted(feat_ids, key=lambda x: feat_statistics.get(x, 0), reverse=True)
+                for feat_id in sorted_feats:
+                    if feat_id in feat_statistics:
+                        count = feat_statistics[feat_id]
+                        print(f"  {feat_id}: {count:8,} 个不同值")
+
+        # 4. 总体统计
+        print(f"\n📋 总体统计:")
+        print("-" * 50)
+        total_features = sum(len(feat_ids) for feat_ids in feature_types.values())
+        features_with_stats = len(feat_statistics)
+        total_unique_values = sum(feat_statistics.values())
+
+        print(f"总特征数量: {total_features}")
+        print(f"有统计信息的特征数量: {features_with_stats}")
+        print(f"所有特征的唯一值总数: {total_unique_values:,}")
+
+        # 5. 特征规模分析
+        if feat_statistics:
+            print(f"\n📊 特征规模分析:")
+            print("-" * 50)
+            stats_values = list(feat_statistics.values())
+            print(f"最大特征规模: {max(stats_values):,}")
+            print(f"最小特征规模: {min(stats_values):,}")
+            print(f"平均特征规模: {np.mean(stats_values):,.1f}")
+            print(f"中位数特征规模: {np.median(stats_values):,.1f}")
+
+        print("=" * 80)
+    feat_stat()
+

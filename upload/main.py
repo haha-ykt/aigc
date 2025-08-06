@@ -84,7 +84,7 @@ if __name__ == '__main__':
     # user_sparse: [103, 104, 105, 109]
     # item_sparse: [100, 101, 102, 111, 112, 114, 115, 116, 117, 118, 119, 120, 121, 122]
     # user_array: [106, 107, 108, 110]，这些类似多标签的离散特征，类似（最喜欢的几个类别？）
-    # item_emb: [81]
+    # item_emb: 物品多模态特征，传入几个就是几个，如只传入81就是[81]
     # item_array, user_continual, item_continual 暂时没有
     feat_statistics, feat_types = dataset.feat_statistics, dataset.feature_types
     model = BaselineModel(usernum, itemnum, feat_statistics, feat_types, args).to(args.device)
@@ -94,7 +94,7 @@ if __name__ == '__main__':
             torch.nn.init.xavier_normal_(param.data)
         except Exception:
             pass
-
+    # 0 是多余的，其他embedding初始化为0
     model.pos_emb.weight.data[0, :] = 0
     model.item_emb.weight.data[0, :] = 0
     model.user_emb.weight.data[0, :] = 0
