@@ -382,11 +382,11 @@ class BaselineModel(torch.nn.Module):
             pos_logits: 正样本logits，形状为 [batch_size, maxlen]
             neg_logits: 负样本logits，形状为 [batch_size, maxlen]
         """
-        log_feats = self.log2feats(user_item, mask, seq_feature)  # [batch_size, 102, hidden_units]
-        loss_mask = (next_mask == 1).to(self.dev)
+        log_feats = self.log2feats(user_item, mask, seq_feature)  # [batch_size, 102, hidden_units], 序列经过mha得到的结果；这里先调用了feat2emb获取embedding
+        loss_mask = (next_mask == 1).to(self.dev)  # [batch_size, 102], 下一个token是item的mask为1
 
-        pos_embs = self.feat2emb(pos_seqs, pos_feature, include_user=False)
-        neg_embs = self.feat2emb(neg_seqs, neg_feature, include_user=False)
+        pos_embs = self.feat2emb(pos_seqs, pos_feature, include_user=False)  # [batch_size, 102, hidden_units], 直接取embedding  
+        neg_embs = self.feat2emb(neg_seqs, neg_feature, include_user=False)  # [batch_size, 102, hidden_units]
 
         pos_logits = (log_feats * pos_embs).sum(dim=-1)
         neg_logits = (log_feats * neg_embs).sum(dim=-1)
@@ -407,7 +407,7 @@ class BaselineModel(torch.nn.Module):
         """
         log_feats = self.log2feats(log_seqs, mask, seq_feature)
 
-        final_feat = log_feats[:, -1, :]
+        final_feat = log_feats[:, -1, :]  # 用序列最后一个元素的表征作为用户的表征
 
         return final_feat
 
@@ -427,14 +427,14 @@ class BaselineModel(torch.nn.Module):
         for start_idx in tqdm(range(0, len(item_ids), batch_size), desc="Saving item embeddings"):
             end_idx = min(start_idx + batch_size, len(item_ids))
 
-            item_seq = torch.tensor(item_ids[start_idx:end_idx], device=self.dev).unsqueeze(0)
+            item_seq = torch.tensor(item_ids[start_idx:end_idx], device=self.dev).unsqueeze(0)  # 当前batch的item id
             batch_feat = []
             for i in range(start_idx, end_idx):
-                batch_feat.append(feat_dict[i])
+                batch_feat.append(feat_dict[i])  # 读取当前item的feat
 
             batch_feat = np.array(batch_feat, dtype=object)
 
-            batch_emb = self.feat2emb(item_seq, [batch_feat], include_user=False).squeeze(0)
+            batch_emb = self.feat2emb(item_seq, [batch_feat], include_user=False).squeeze(0)  # 获取当前item的embedding
 
             all_embs.append(batch_emb.detach().cpu().numpy().astype(np.float32))
 
