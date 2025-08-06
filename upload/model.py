@@ -322,7 +322,7 @@ class BaselineModel(torch.nn.Module):
         """
         Args:
             log_seqs: 序列ID
-            mask: token类型掩码，1表示item token，2表示user token
+            mask: token类型掩码，1表示item token，2表示user token, [batch_size, 102]
             seq_feature: 序列特征list，每个元素为当前时刻的特征字典
 
         Returns:
@@ -330,25 +330,28 @@ class BaselineModel(torch.nn.Module):
         """
         batch_size = log_seqs.shape[0]
         maxlen = log_seqs.shape[1]
-        seqs = self.feat2emb(log_seqs, seq_feature, mask=mask, include_user=True)
-        seqs *= self.item_emb.embedding_dim**0.5
-        poss = torch.arange(1, maxlen + 1, device=self.dev).unsqueeze(0).expand(batch_size, -1).clone()
-        poss *= log_seqs != 0
-        seqs += self.pos_emb(poss)
-        seqs = self.emb_dropout(seqs)
+        seqs = self.feat2emb(log_seqs, seq_feature, mask=mask, include_user=True)  # 获取序列的embedding， 形状为 [batch_size, 102, hidden_units], 这里每个元素都包含user/item本身embedding, 特征embedding和多模态embedding，经过dnn转为了hidden_units维
+        seqs *= self.item_emb.embedding_dim**0.5  # 在多头注意力机制中，q,k,v矩阵都乘以根号d，与这里相抵消
+        poss = torch.arange(1, maxlen + 1, device=self.dev).unsqueeze(0).expand(batch_size, -1).clone()  # [batch_size, 102], 每个元素为[1, 2, ... 102]
+        poss *= log_seqs != 0  # 将padding位置置为0
+        seqs += self.pos_emb(poss)  # 加上位置embedding
+        seqs = self.emb_dropout(seqs)  # dropout
 
         maxlen = seqs.shape[1]
         ones_matrix = torch.ones((maxlen, maxlen), dtype=torch.bool, device=self.dev)
-        attention_mask_tril = torch.tril(ones_matrix)
-        attention_mask_pad = (mask != 0).to(self.dev)
-        attention_mask = attention_mask_tril.unsqueeze(0) & attention_mask_pad.unsqueeze(1)
+        attention_mask_tril = torch.tril(ones_matrix)  # 102*102的下
+        attention_mask_pad = (mask != 0).to(self.dev)  # [batch_size*102], user或item的mask都是1，padding的mask都0
+        attention_mask = attention_mask_tril.unsqueeze(0) & attention_mask_pad.unsqueeze(1)  # [1, 102, 102] & [batch_size, 102, 1] -> [batch_size, 102, 102]
 
+        # 多头自注意力
         for i in range(len(self.attention_layers)):
+            # pre-layernorm
             if self.norm_first:
                 x = self.attention_layernorms[i](seqs)
                 mha_outputs, _ = self.attention_layers[i](x, x, x, attn_mask=attention_mask)
                 seqs = seqs + mha_outputs
                 seqs = seqs + self.forward_layers[i](self.forward_layernorms[i](seqs))
+            # post-layernorm
             else:
                 mha_outputs, _ = self.attention_layers[i](seqs, seqs, seqs, attn_mask=attention_mask)
                 seqs = self.attention_layernorms[i](seqs + mha_outputs)
@@ -379,7 +382,7 @@ class BaselineModel(torch.nn.Module):
             pos_logits: 正样本logits，形状为 [batch_size, maxlen]
             neg_logits: 负样本logits，形状为 [batch_size, maxlen]
         """
-        log_feats = self.log2feats(user_item, mask, seq_feature)
+        log_feats = self.log2feats(user_item, mask, seq_feature)  # [batch_size, 102, hidden_units]
         loss_mask = (next_mask == 1).to(self.dev)
 
         pos_embs = self.feat2emb(pos_seqs, pos_feature, include_user=False)
